@@ -1,0 +1,3 @@
+make
+insmod keylager.ko
+mknod klog c 248 0

