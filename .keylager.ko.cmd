@@ -1,0 +1,1 @@
+cmd_/root/code/keylager/keylager.ko := ld -r -m elf_x86_64 -T /usr/src/linux-headers-4.9.0-6-common/scripts/module-common.lds --build-id  -o /root/code/keylager/keylager.ko /root/code/keylager/keylager.o /root/code/keylager/keylager.mod.o ;  true
