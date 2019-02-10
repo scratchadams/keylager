@@ -273,7 +273,7 @@ static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
 	iov.iov_base = buf;
 	iov.iov_len = len;
 
-	iov_iter_init(&msg.msg_iter, READ, &iov, 1, 1);
+	iov_iter_init(&msg.msg_iter, READ, &iov, 1, len);
 
 	msg.msg_flags = 0;
 	msg.msg_name = addr;
