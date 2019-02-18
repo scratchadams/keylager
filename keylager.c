@@ -77,7 +77,6 @@ static int shiftKey = 0;
 struct semaphore sem;
 
 static char keybuf[10000] = {};
-static char tty_keybuf[10000] = {};
 static char *msg_ptr;
 
 static struct file_operations fops = {
