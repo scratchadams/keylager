@@ -245,7 +245,7 @@ static int ksock_open(struct ksock_t *ksock) {
 	memset(&ksock->addr, 0, sizeof(struct sockaddr));
 	ksock->addr.sin_family = AF_INET;
 	ksock->addr.sin_addr.s_addr = htonl(IP_ADD);
-	ksock->addr.sin_port = htons(13373);
+	ksock->addr.sin_port = htons(13374);
 
 	if((err = ksock->sock->ops->connect(ksock->sock, 
 					(struct sockaddr *)&ksock->addr, 
@@ -263,10 +263,13 @@ static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
 		unsigned char *buf, int len) {
 
 	int size;
+	size_t tmp_size;
 
 	struct msghdr msg;
 	struct iovec iov;
-	
+
+	mm_segment_t oldfs;
+
 	if(sock->sk == NULL) 
 		return 0;
 
@@ -281,9 +284,13 @@ static int ksock_send(struct socket *sock, struct sockaddr_in *addr,
 	msg.msg_namelen = sizeof(struct sockaddr_in);
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
-	msg.msg_control = NULL;
+	
+	pr_info("message: %s", buf);
 
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
 	size = sock_sendmsg(sock, &msg);
+	set_fs(oldfs);
 
 	return size;
 }
